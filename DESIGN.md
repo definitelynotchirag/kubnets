@@ -95,10 +95,10 @@ Deliberate details:
   anyone who can read `sh.helm.release.*`. The chart consumes `existingSecret` instead, and the
   API passes only the secret *name*.
 * **Re-running provisioning on a `Ready` store converges** (Helm reconciles, credentials are
-  reused) — it does not create a second store or destroy data.
+  reused), it does not create a second store or destroy data.
 * **Convergence uses PUT (`replace`), not PATCH.** `@kubernetes/client-node` 1.x sends PATCH as
   `application/json-patch+json` while these desired states are merge-patch documents, which a real
-  API server rejects; a replace is also stricter — fields that left the desired state actually go
+  API server rejects; a replace is also stricter, fields that left the desired state actually go
   away instead of lingering. The update carries the `resourceVersion` read from the server (what
   `kubectl replace` does), so a concurrent writer yields a 409 rather than a lost update;
   `ensureObject` re-reads and retries a bounded number of times, and recreates the object if it
@@ -116,7 +116,7 @@ store `Ready`.
 * **Probe target is configurable, the probe is not.** `STORE_PROBE_MODE=service` (default, when
   the platform runs in-cluster) dials `<release>-wordpress.<ns>.svc.cluster.local`; `ingress`
   dials the ingress front door for the docker-compose setup where the API is outside the cluster.
-  There is no "skip the probe" switch — a `Ready` store has served at least one HTTP request.
+  There is no "skip the probe" switch, a `Ready` store has served at least one HTTP request.
 * The probe uses `node:http`, not `fetch`: `fetch` drops the `Host` header (forbidden per spec)
   and follows redirects, which for WordPress would chase the public hostname from inside the
   cluster. The probe sends the public hostname as `Host` and treats any status `< 400` as success
@@ -132,7 +132,7 @@ something. The init Job runs as a Helm `post-install,post-upgrade` hook with
 2. installs/activates WooCommerce (idempotently),
 3. creates the shop/cart/checkout pages, sets permalinks, currency and store country,
 4. turns off WooCommerce's "coming soon" mode (fresh WooCommerce 9.x hides the storefront
-   otherwise — an easy way to ship a store that looks broken),
+   otherwise, an easy way to ship a store that looks broken),
 5. enables **Cash on Delivery** (works with no payment provider),
 6. seeds **Demo Product** by looking it up by SKU first.
 
@@ -209,7 +209,7 @@ Two decisions worth defending:
 
 Deleting a store removes everything it owns, in an order that cannot orphan resources:
 
-1. `helm uninstall` (skipped when the release is already gone — the common case after a failed
+1. `helm uninstall` (skipped when the release is already gone, the common case after a failed
    provisioning run, where deleting the release is the point of the retry).
 2. Delete the namespace, which cascades pods, services, ingresses, secrets and claims.
 3. **Confirm** the namespace is actually gone (polled until 404, bounded), because namespace
@@ -218,7 +218,7 @@ Deleting a store removes everything it owns, in an order that cannot orphan reso
    while its resources are still terminating.
 
 Failure handling is deliberately asymmetric: a failure here sets the store to `Failed` with the
-error message, and a repeated `DELETE` (or the next startup) retries the whole sequence — every
+error message, and a repeated `DELETE` (or the next startup) retries the whole sequence, every
 step is safe to repeat because a missing release and a missing namespace are both expected states.
 
 **PVC caveat worth stating in a review:** deleting a namespace deletes the claims, but whether the
@@ -245,19 +245,19 @@ NetworkPolicies are additive, that default would silently defeat the per-store a
 Egress stays open (`allowExternalEgress: true`) because WordPress must reach wordpress.org for
 plugin installs and updates.
 
-**Enforcement caveat:** Kubernetes does not enforce NetworkPolicy itself — the CNI does. k3s
+**Enforcement caveat:** Kubernetes does not enforce NetworkPolicy itself, the CNI does. k3s
 (both local paths here, and the suggested VPS setup) enforces it; a CNI that ignores NetworkPolicy
 would accept these objects and enforce nothing. This repository does not claim enforcement was
 measured on your cluster.
 
 **RBAC caveat (least privilege, honestly):** the API's ClusterRole grants namespaced verbs for
-the resource types the store charts render — in *every* namespace, not only store namespaces.
+the resource types the store charts render, in *every* namespace, not only store namespaces.
 That cannot be narrowed with `resourceNames` (create cannot be name-scoped, and store namespaces
 do not exist until runtime), and pre-creating a Role per store would require the API to manage
 `roles`/`rolebindings` plus `escalate`, which is a larger privilege. What *is* limited: no
 wildcards, no RBAC objects, no nodes, no CRDs, and only the kinds the charts actually render.
 `npm run check:rbac` renders the store chart, collects every kind it creates and asserts the
-ClusterRole covers each one — so the two cannot drift silently.
+ClusterRole covers each one, so the two cannot drift silently.
 
 ---
 
@@ -292,7 +292,7 @@ with an `emptyDir` at `/tmp` (Helm needs writable cache/config/data directories,
   where each entry carries the step's own explanation. New entries animate in; history does not
   re-animate on every poll.
 * `GET /api/metrics`: totals, counts by status, average provisioning duration, recent failures.
-* Failure messages carry the failing step, and init failures carry the init Job's log tail —
+* Failure messages carry the failing step, and init failures carry the init Job's log tail , 
   "post-install hooks failed" alone is not an actionable error.
 
 ---
@@ -355,5 +355,30 @@ platform chart renders into the ConfigMap (`helm/platform/templates/configmap.ya
 Kafka, Temporal, custom resources, a Kubernetes operator, a service mesh, Argo CD/GitOps, and a
 full CI/CD pipeline. They would each add moving parts without changing what this platform has to
 prove: correct lifecycle, real isolation, and honest recovery. The design notes above record where
-each of them would slot in if the system had to grow — the queue is the first real limit, and it
+each of them would slot in if the system had to grow, the queue is the first real limit, and it
 is documented rather than hidden.
+
+---
+
+## Tradeoffs summary
+
+| # | Decision | What we gain | What we pay (tradeoff) | Production evolution / fix |
+|---|---|---|---|---|
+| 1 | **Helm CLI via `execa`** (no JS SDK) | Tracks Helm's real semantics (release storage, hooks, `--wait`), same as Argo CD, Flux, Rancher | API image must ship a pinned `helm` binary (`v3.22.0`); behavior coupled to that version's flags; RBAC surface = whatever the store charts render | Pin + document the version; RBAC coverage checked by `check:rbac` |
+| 2 | **Wrapper chart over Bitnami WordPress+MariaDB** | Huge reduction in correctness surface vs hand-written manifests | 3 chart levels (ours → wordpress → mariadb) make name derivation subtle | Helpers mirror Bitnami's naming rule so a Job cannot point at the wrong Service |
+| 3 | **In-process queue (`p-limit`) instead of Redis/BullMQ/K8s Jobs** | One moving part; per-store serialization (delete queues behind provision, never dropped) | Not distributed: 2 replicas would double-provision the same store → `api.replicas` pinned to 1 | Shared queue (BullMQ/K8s Jobs/leased Postgres table); convergence logic unchanged |
+| 4 | **Prisma + PostgreSQL for desired state** | One table says what *should* exist → crash recovery/reconciliation possible | `prisma migrate deploy` at container start, fine for 1 replica, not a multi-replica migration strategy | Run migrations as a separate Job |
+| 5 | **Namespace-per-store** | Isolation for quotas/policies/RBAC; one `kubectl delete ns` = complete teardown; easy debugging | Cluster-level object (create needs cluster-scope permission) | - |
+| 6 | **MariaDB per store** | Strong isolation; DB lifecycle dies with the namespace | Memory+storage cost scales linearly per tenant; no shared backup/upgrade story | Managed/shared DB tier, one DB per store, contract unchanged |
+| 7 | **PUT (`replace`) not PATCH for convergence** | Stricter: removed fields actually disappear; 409 on concurrent writers, no lost updates | Requires read-then-write with `resourceVersion`; bounded re-read/retry logic | - |
+| 8 | **HTTP probe before `Ready`** | `Ready` = Helm `--wait --wait-for-jobs` **and** the storefront answered a request, "usable", not "running" | Provisioning slower (waits for real HTTP); probe target varies by setup (`service` vs `ingress` mode) | No skip-probe switch, by design |
+| 9 | **Init Job as Helm hook + `before-hook-creation`** | Retriable on every `helm upgrade` (plain Jobs are immutable, rejected); fails loudly → store `Failed`, never silent `Ready` | Job mounts the WordPress PVC (`ReadWriteOnce`) → must land on the WordPress pod's node on multi-node; wp-cli.phar fallback needs egress | Node affinity rule or `ReadWriteMany` storage class |
+| 10 | **Credentials: per-store Secret, generated once, never rotated** | Retries never lock WordPress out of its own DB | Missing key = loud failure, no silent regeneration; no rotation story | Rotation is a deliberate ensure + store restart |
+| 11 | **Passwords never via `helm --set`** (chart consumes `existingSecret`) | Helm stores `--set` verbatim in the release Secret, this closes that leak | Slightly more chart plumbing (secret *name* passed, not values) | Same in prod; platform DB via operator-created Secret |
+| 12 | **`readOnlyRootFilesystem` only for platform containers** | Non-root UID 1000, caps dropped, seccomp `RuntimeDefault`, read-only FS with `/tmp` emptyDir for Helm | Not enabled for store pods/init Job, Bitnami entrypoint + WP-CLI write at startup; forcing it breaks the product | Deliberate omission, not an oversight |
+| 13 | **ClusterRole scoped to chart-rendered kinds** | No wildcards, no RBAC objects, no nodes, no CRDs; `check:rbac` prevents chart/role drift | Namespaced verbs apply to every namespace (`resourceNames` can't narrow `create`; per-store Roles would need `escalate` = bigger privilege) | Future operator/CRD approach |
+| 14 | **NetworkPolicies: default-deny + allow-list; Bitnami's own set to `allowExternal: false`** | Real tenant isolation (measured: cross-tenant refused, same-ns 200) | Enforcement depends on the CNI, k3s enforces it; egress stays open (WordPress needs wordpress.org) | Verify enforcement per-cluster |
+| 15 | **`Failed` is terminal; no auto-retry** | Failures stay visible & inspectable; no infinite retry burning cluster resources | A transient blip leaves a store Failed until a human deletes it | Deliberate, recovery is explicit |
+| 16 | **Deletion confirms namespace gone (poll to 404) before dropping the record** | Dashboard never claims "deleted" while resources still terminate | Slower deletion; stuck finalizers surface as `Failed` with actionable message | - |
+| 17 | **Pinned third-party images (`bitnamilegacy/postgresql:17.6.0…`)** | Bitnami withdrew versioned tags, pinning prevents the `ImagePullBackOff`-while-Helm-says-deployed failure mode | Store WordPress/MariaDB still track subchart `latest` defaults | Pin store images in prod values |
+| 18 | **Deliberately NOT built**: Kafka, Temporal, operator, service mesh, Argo CD/GitOps, CI/CD | Zero extra moving parts; proof focuses on lifecycle, isolation, honest recovery | Each would slot in later, the queue is the first real limit | Documented, not hidden |
