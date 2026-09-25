@@ -1,16 +1,63 @@
+# Platform chart values.
+#
+# Everything here is safe for local development. The production overrides live in
+# values-prod.yaml, which is expected to be combined with operator-managed secrets.
 api:
   image:
     repository: urumi-api
     tag: latest
     pullPolicy: IfNotPresent
+  # Keep at 1: provisioning is an in-memory queue in this process (see DESIGN.md -> Scaling).
   replicas: 1
   port: 3001
+
+  # Rendered verbatim into the ConfigMap consumed by the API container.
+  # These keys must match api/src/config.ts — drift between the two is a bug.
   env:
+    NODE_ENV: production
     STORE_DOMAIN: localtest.me
-    HELM_CHART_PATH: /app/charts/store
+    # http locally; values-prod.yaml switches this to https so store URLs are correct.
+    STORE_URL_SCHEME: http
+    HELM_CHART_PATH_WOOCOMMERCE: /app/charts/store
+    HELM_CHART_PATH_MEDUSA: /app/charts/medusa-store
+    # Selects charts/store/values-local.yaml vs values-prod.yaml at provisioning time.
+    HELM_VALUES_PROFILE: local
+    # "service" probes the store's in-cluster Service (API runs inside the cluster).
+    # The docker-compose environment sets "ingress" instead — see docker-compose.dev.yaml.
+    STORE_PROBE_MODE: service
+    # Namespace of the ingress controller that must be allowed to reach store pods.
+    # Must match where the controller actually runs, or stores will be unreachable.
+    INGRESS_NAMESPACE: ingress-nginx
+    STORE_SECRET_NAME: store-credentials
     MAX_STORES: "5"
     MAX_CONCURRENT_PROVISIONS: "3"
-    NODE_ENV: production
+
+  # Name of the Secret holding the key `DATABASE_URL`. It is created outside the chart in every
+  # profile (scripts/deploy-platform-local.sh bootstraps it locally, values-prod.yaml documents
+  # the production equivalent), so no credential ever lives in a values file or in the chart's
+  # rendered output.
+  databaseUrlSecret: urumi-postgres
+
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    runAsGroup: 1000
+    fsGroup: 1000
+    seccompProfile:
+      type: RuntimeDefault
+  securityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities:
+      drop:
+        - ALL
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: "1"
+      memory: 512Mi
 
 dashboard:
   image:
@@ -18,7 +65,27 @@ dashboard:
     tag: latest
     pullPolicy: IfNotPresent
   replicas: 1
-  port: 80
+  # Unprivileged port so the container can run as a non-root user.
+  port: 8080
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    runAsGroup: 1000
+    seccompProfile:
+      type: RuntimeDefault
+  securityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities:
+      drop:
+        - ALL
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 250m
+      memory: 128Mi
 
 ingress:
   enabled: true
@@ -29,9 +96,21 @@ ingress:
 postgresql:
   enabled: true
   auth:
+    # Credentials come from the Secret above; only non-secret identifiers live here.
     username: urumi
-    password: urumi
     database: urumi
+    existingSecret: urumi-postgres
+    secretKeys:
+      adminPasswordKey: postgres-password
+      userPasswordKey: password
+  image:
+    # Bitnami moved versioned tags out of `bitnami/*` into `bitnamilegacy/*` (Docker Hub policy
+    # change), so the version baked into this subchart no longer resolves:
+    #   docker.io/bitnami/postgresql:17.6.0-debian-12-r4 -> not found
+    # Pull the pinned version from the legacy repository instead of falling back to a floating
+    # `latest` tag, which would make the platform database unpinned and unreproducible.
+    repository: bitnamilegacy/postgresql
+    tag: 17.6.0-debian-12-r4
   primary:
     persistence:
       size: 1Gi

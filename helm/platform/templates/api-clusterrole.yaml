@@ -5,21 +5,61 @@ metadata:
   labels:
     {{- include "urumi.labels" . | nindent 4 }}
 rules:
+  # Namespaces are cluster-scoped, which is the one unavoidable cluster-level permission:
+  # a store's isolation boundary IS its namespace. Everything else below is namespaced.
   - apiGroups: [""]
     resources: ["namespaces"]
-    verbs: ["get", "list", "create", "delete"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+
+  # TRADEOFF (worth stating plainly in a review): a ClusterRole bound to this ServiceAccount
+  # grants these verbs on these resource types in EVERY namespace, not only in the store
+  # namespaces the API creates. That is not tightenable with `resourceNames` (create cannot be
+  # name-scoped, and store namespaces do not exist until runtime), and pre-creating a Role per
+  # store would mean the API needs `roles`/`rolebindings` rights plus `escalate` — a larger
+  # privilege, not a smaller one. What is limited instead:
+  #   * only the resource types the store charts actually render (see the list below),
+  #   * no access to RBAC objects, nodes, CRDs, or anything cluster-scoped beyond namespaces,
+  #   * no wildcards.
+  # The service account is used exclusively by this API's pod.
+
+  # The API's own guardrail objects (ResourceQuota, LimitRange, NetworkPolicy, Secret) plus
+  # everything the store charts render: ConfigMap, Service, ServiceAccount, PVC, Pods
+  # (Helm needs to watch pods to implement --wait), pod logs for init-failure diagnostics.
   - apiGroups: [""]
-    resources: ["secrets"]
-    verbs: ["get", "list", "create", "delete"]
+    resources:
+      ["secrets", "configmaps", "services", "serviceaccounts", "persistentvolumeclaims",
+       "resourcequotas", "limitranges", "events"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   - apiGroups: [""]
     resources: ["pods"]
     verbs: ["get", "list", "watch"]
   - apiGroups: [""]
-    resources: ["resourcequotas"]
-    verbs: ["get", "list", "create", "delete"]
-  - apiGroups: [""]
-    resources: ["limitranges"]
-    verbs: ["get", "list", "create", "delete"]
+    resources: ["pods/log"]
+    verbs: ["get"]
+
+  # Workloads created by the store charts (WordPress Deployment, MariaDB StatefulSet).
+  - apiGroups: ["apps"]
+    resources: ["deployments", "statefulsets", "replicasets", "daemonsets"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+
+  # The WooCommerce init hook runs as a Job; Helm with --wait --wait-for-jobs watches it.
+  - apiGroups: ["batch"]
+    resources: ["jobs", "cronjobs"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+
   - apiGroups: ["networking.k8s.io"]
-    resources: ["networkpolicies"]
-    verbs: ["get", "list", "create", "delete"]
+    resources: ["ingresses", "networkpolicies"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+
+  # Bitnami subcharts ship PodDisruptionBudgets by default; Helm must be able to manage them.
+  - apiGroups: ["policy"]
+    resources: ["poddisruptionbudgets"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+
+  # NOT granted, on purpose:
+  #   * cluster-admin / wildcards — the API only needs the resource types its charts render.
+  #   * rbac.authorization.k8s.io — no store chart creates Roles/RoleBindings. If one is ever
+  #     enabled (e.g. a chart with rbac.create=true), `bind`/`escalate` must be added here or
+  #     Helm installs will fail with "forbidden".
+  #   * autoscaling — HorizontalPodAutoscalers are disabled in the store values. Enabling them
+  #     requires adding the `autoscaling` group here.

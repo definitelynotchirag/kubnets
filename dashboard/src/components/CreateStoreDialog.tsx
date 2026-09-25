@@ -57,16 +57,15 @@ export function CreateStoreDialog() {
             WooCommerce
           </button>
           <button
-            onClick={() => setEngine("medusa")}
-            className={`px-3 py-2.5 rounded-lg border text-sm font-medium transition-all relative ${
-              engine === "medusa"
-                ? "border-[var(--color-accent)] bg-[var(--color-accent)] text-white"
-                : "border-[var(--color-border)] text-[var(--color-text-secondary)] hover:border-[var(--color-text-muted)]"
-            }`}
+            type="button"
+            disabled
+            aria-disabled="true"
+            title="MedusaJS is an architecture stub in Round 1 — the provisioning abstraction supports it, the engine implementation does not exist yet."
+            className="px-3 py-2.5 rounded-lg border border-dashed text-sm font-medium border-[var(--color-border)] text-[var(--color-text-muted)] cursor-not-allowed opacity-70 relative"
           >
             MedusaJS
-            <span className="absolute -top-1.5 -right-1.5 text-[9px] bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded-full font-medium">
-              Beta
+            <span className="absolute -top-1.5 -right-1.5 text-[9px] bg-stone-100 text-[var(--color-text-muted)] px-1.5 py-0.5 rounded-full font-medium whitespace-nowrap">
+              Coming soon
             </span>
           </button>
         </div>

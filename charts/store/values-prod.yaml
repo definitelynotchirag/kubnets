@@ -1,5 +1,8 @@
 # Production overrides
 wordpress:
+  # TLS is on in this profile, so WordPress must generate https URLs.
+  wordpressScheme: https
+
   resources:
     requests:
       cpu: 250m

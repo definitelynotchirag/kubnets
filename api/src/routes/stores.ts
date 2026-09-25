@@ -4,6 +4,7 @@ import { validate } from "../middleware/validate.js";
 import { createStoreLimiter } from "../middleware/rate-limit.js";
 import * as storeService from "../services/store.service.js";
 import { getAuditLogs } from "../services/audit.service.js";
+import { StoreLimitReachedError, UnsupportedEngineError } from "../lib/errors.js";
 
 export const storesRouter = Router();
 
@@ -13,8 +14,12 @@ storesRouter.post("/", createStoreLimiter, validate(createStoreSchema, "body"), 
     const store = await storeService.createStore(req.body.engine, req.ip);
     res.status(201).json({ store });
   } catch (err: unknown) {
-    if (err instanceof Error && err.message.includes("Maximum")) {
+    if (err instanceof StoreLimitReachedError) {
       res.status(409).json({ error: err.message });
+      return;
+    }
+    if (err instanceof UnsupportedEngineError) {
+      res.status(501).json({ error: err.message });
       return;
     }
     next(err);

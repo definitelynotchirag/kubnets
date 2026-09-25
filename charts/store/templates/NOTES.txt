@@ -1,14 +1,37 @@
-Urumi Store "{{ .Release.Name }}" has been deployed!
-
 {{- if .Values.wordpress.ingress.enabled }}
-
-Access your store at:
+Store URL:
   http{{ if .Values.wordpress.ingress.tls }}s{{ end }}://{{ .Values.wordpress.ingress.hostname }}
 
+WordPress admin:
+  http{{ if .Values.wordpress.ingress.tls }}s{{ end }}://{{ .Values.wordpress.ingress.hostname }}/wp-admin
+  Username: {{ .Values.wordpress.wordpressUsername }}
+  Password:
+    kubectl get secret -n {{ .Release.Namespace }} {{ .Values.woocommerceInit.existingSecret }} \
+      -o jsonpath='{.data.wordpress-password}' | base64 -d
+    (secret "{{ .Values.woocommerceInit.existingSecret }}" is created by the platform API; when
+     the chart is installed standalone it does not exist and the WordPress subchart generates its
+     own "<release>-wordpress" secret instead)
 {{- end }}
 
-WordPress admin:
-  Username: {{ .Values.wordpress.wordpressUsername }}
-  Password: kubectl get secret --namespace {{ .Release.Namespace }} {{ .Release.Name }}-wordpress -o jsonpath="{.data.wordpress-password}" | base64 -d
+{{- if .Values.woocommerceInit.enabled }}
 
-WooCommerce is pre-installed and ready for configuration.
+A post-install hook Job ("{{ .Release.Name }}-woocommerce-init") has already run and:
+  * activated the WooCommerce plugin,
+  * created the shop/cart/checkout pages, turned off WooCommerce "coming soon" mode, and set the
+    shop page as the site front page,
+  * enabled Cash on Delivery and allowed it for virtual orders,
+  * seeded the demo product "{{ .Values.woocommerceInit.product.name }}"
+    (SKU {{ .Values.woocommerceInit.product.sku }}, price {{ .Values.woocommerceInit.product.price }} {{ .Values.woocommerceInit.currency }}{{ if .Values.woocommerceInit.product.virtual }}, virtual{{ end }}),
+{{- if .Values.woocommerceInit.seedFreeShipping }}
+  * seeded a "{{ .Values.woocommerceInit.shippingZoneName }}" free-shipping zone for {{ .Values.woocommerceInit.shippingCountry }} (best effort).
+{{- end }}
+
+So the storefront already supports: open the store URL -> see the product -> add to cart ->
+checkout -> Cash on Delivery -> place order.
+
+Its log is kept for debugging:
+  kubectl logs -n {{ .Release.Namespace }} job/{{ .Release.Name }}-woocommerce-init
+{{- end }}
+
+Store credentials live in the "{{ .Values.woocommerceInit.existingSecret }}" secret of namespace
+{{ .Release.Namespace }} (created by the platform API, or by you for a standalone install).

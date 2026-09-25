@@ -16,10 +16,14 @@ spec:
         app.kubernetes.io/name: {{ include "urumi.fullname" . }}-dashboard
         app.kubernetes.io/component: dashboard
     spec:
+      securityContext:
+        {{- toYaml .Values.dashboard.podSecurityContext | nindent 8 }}
       containers:
         - name: dashboard
           image: "{{ .Values.dashboard.image.repository }}:{{ .Values.dashboard.image.tag }}"
           imagePullPolicy: {{ .Values.dashboard.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.dashboard.securityContext | nindent 12 }}
           ports:
             - containerPort: {{ .Values.dashboard.port }}
               protocol: TCP
@@ -29,3 +33,11 @@ spec:
               port: {{ .Values.dashboard.port }}
             initialDelaySeconds: 5
             periodSeconds: 10
+          resources:
+            {{- toYaml .Values.dashboard.resources | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}

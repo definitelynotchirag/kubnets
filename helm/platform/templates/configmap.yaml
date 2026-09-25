@@ -5,9 +5,12 @@ metadata:
   labels:
     {{- include "urumi.labels" . | nindent 4 }}
 data:
-  STORE_DOMAIN: {{ .Values.api.env.STORE_DOMAIN | quote }}
-  HELM_CHART_PATH: {{ .Values.api.env.HELM_CHART_PATH | quote }}
-  MAX_STORES: {{ .Values.api.env.MAX_STORES | quote }}
-  MAX_CONCURRENT_PROVISIONS: {{ .Values.api.env.MAX_CONCURRENT_PROVISIONS | quote }}
-  NODE_ENV: {{ .Values.api.env.NODE_ENV | quote }}
+  # Rendered from `.Values.api.env` so Helm values and the runtime environment cannot drift.
+  {{- range $key, $value := .Values.api.env }}
+  {{ $key }}: {{ $value | quote }}
+  {{- end }}
   PORT: {{ .Values.api.port | quote }}
+  # The API must know which namespace it runs in: store namespaces allow ingress from it so
+  # the post-provision readiness probe can reach the storefront Service directly.
+  PLATFORM_NAMESPACE: {{ .Release.Namespace | quote }}
+  KUBECONFIG: ""

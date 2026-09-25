@@ -83,9 +83,16 @@ services:
       PORT: "3001"
       KUBECONFIG: /k3s-config/kubeconfig.yaml
       STORE_DOMAIN: localtest.me
+      STORE_URL_SCHEME: http
       HELM_CHART_PATH_WOOCOMMERCE: /app/charts/store
       HELM_CHART_PATH_MEDUSA: /app/charts/medusa-store
       HELM_VALUES_PROFILE: local
+      # The API container runs OUTSIDE the k3s cluster here, so it cannot resolve
+      # `<svc>.<ns>.svc.cluster.local`. It probes the ingress instead, using the k3s
+      # container name as the address and the store hostname as the Host header.
+      STORE_PROBE_MODE: ingress
+      STORE_PROBE_INGRESS_HOST: k3s
+      PLATFORM_NAMESPACE: urumi-system
       DASHBOARD_PATH: /app/dashboard/dist
       MAX_STORES: "5"
       MAX_CONCURRENT_PROVISIONS: "3"

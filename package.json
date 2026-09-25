@@ -11,7 +11,14 @@
     "dev:api": "npm run dev -w api",
     "dev:dashboard": "npm run dev -w dashboard",
     "lint": "npm run lint --workspaces --if-present",
-    "test": "npm run test --workspaces --if-present"
+    "test": "npm run test --workspaces --if-present",
+    "check:charts": "bash scripts/test-helm.sh",
+    "check:rbac": "node scripts/check-rbac-coverage.mjs",
+    "test:e2e": "bash scripts/test-e2e.sh",
+    "test:concurrency": "bash scripts/test-concurrency.sh",
+    "test:crash-recovery": "bash scripts/test-crash-recovery.sh",
+    "deploy:local": "bash scripts/deploy-platform-local.sh",
+    "pretest": "npm run build -w packages/shared"
   },
   "engines": {
     "node": ">=20"

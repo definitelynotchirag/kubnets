@@ -1,14 +1,48 @@
-# Production overrides
+# Production overrides.
+#
+# Images must come from a registry the cluster can pull (e.g. GHCR). Pin an immutable tag or
+# digest — never `latest`:
+#   docker build -f api/Dockerfile -t ghcr.io/<owner>/kubnets-api:v0.2.0 .
+#   docker push ghcr.io/<owner>/kubnets-api:v0.2.0
+#   helm upgrade --install urumi ./helm/platform -f helm/platform/values-prod.yaml \
+#     --set api.image.repository=ghcr.io/<owner>/kubnets-api --set api.image.tag=v0.2.0
 api:
+  image:
+    pullPolicy: IfNotPresent
   env:
     NODE_ENV: production
+    # Flipped to prod so the API renders charts/store/values-prod.yaml.
+    HELM_VALUES_PROFILE: prod
+    # Stores are served over TLS (cert-manager + wildcard DNS), so URLs must say https.
+    STORE_URL_SCHEME: https
+    STORE_DOMAIN: stores.example.com
+    STORE_PROBE_MODE: service
 
+  # Credentials do not live in this file. Create them once, per environment:
+  #
+  #   DB_PASSWORD="$(openssl rand -hex 24)"   # hex: safe verbatim inside a PostgreSQL URI
+  #   kubectl create secret generic urumi-postgres -n urumi-system \
+  #     --from-literal=postgres-password="$DB_PASSWORD" \
+  #     --from-literal=password="$DB_PASSWORD" \
+  #     --from-literal=username=urumi \
+  #     --from-literal=database=urumi \
+  #     --from-literal=DATABASE_URL="postgresql://urumi:$DB_PASSWORD@urumi-postgresql:5432/urumi"
+  #
+  # Keys the PostgreSQL subchart reads (auth.secretKeys):
+  #   * `postgres-password` -> the `postgres` admin user
+  #   * `password`          -> the custom user below (auth.username), which is what DATABASE_URL authenticates as
+  # One password for both is intentional: a single-tenant platform database with one less
+  # credential to rotate. `DATABASE_URL` lives in the same Secret, so the password is stored
+  # exactly once and is never rendered by Helm.
 ingress:
   tls: true
+  host: urumi.stores.example.com
   annotations:
     cert-manager.io/cluster-issuer: letsencrypt-prod
 
 postgresql:
+  # Credentials come from the Secret named in values.yaml (`urumi-postgres`); only the volume
+  # size differs from the base profile.
   primary:
     persistence:
       size: 10Gi

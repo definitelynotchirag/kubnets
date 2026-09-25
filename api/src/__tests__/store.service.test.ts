@@ -10,6 +10,9 @@ vi.mock("../lib/prisma.js", () => ({
       findUnique: vi.fn(),
       update: vi.fn(),
     },
+    // store.service writes audit rows for every lifecycle event; without this the service logs
+    // (and swallows) an error on each call, which makes real failures hard to spot in the output.
+    auditLog: { create: vi.fn() },
   },
 }));
 

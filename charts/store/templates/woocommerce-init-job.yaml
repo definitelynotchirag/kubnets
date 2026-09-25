@@ -1,0 +1,347 @@
+{{/*
+WooCommerce initialization job.
+
+Why a Helm hook rather than a plain Job resource:
+  * Helm runs it on every `helm upgrade --install` and `--wait` does not return until the
+    hook reports success, so a store can only reach `Ready` after initialization succeeded
+    (the platform marks a store Ready only when Helm exits 0 and the storefront answers HTTP).
+  * `before-hook-creation` deletes the previous run first. Jobs are effectively immutable, so
+    without this a failed init could never be retried by re-running Helm.
+
+Why it mounts the WordPress PVC and uses the WordPress image:
+  * WP-CLI has to operate on the live installation (wp-config.php, wp-content/plugins), which
+    lives on the PVC, and it has to write with the same UID that owns those files. The image
+    therefore defaults to the WordPress subchart's image; keep them in sync.
+  * Assumptions verified against the Bitnami WordPress container documentation: the image ships
+    WP-CLI (`WP_CLI_BASE_DIR` = /opt/bitnami/wp-cli, binary in .../bin — which is why the script
+    probes that exact path), and "the mounted files and directories must have the proper
+    permissions for the UID 1001" (which is why runAsUser defaults to 1001).
+*/}}
+{{- if .Values.woocommerceInit.enabled }}
+{{- $wpFullname := include "urumi-store.wordpressFullname" . }}
+{{- $mariadbFullname := include "urumi-store.mariadbFullname" . }}
+{{- $secretName := .Values.woocommerceInit.existingSecret }}
+{{- $wpPath := .Values.woocommerceInit.wordpressPath }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ .Release.Name }}-woocommerce-init
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "urumi-store.labels" . | nindent 4 }}
+    app.kubernetes.io/component: woocommerce-init
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "5"
+    "helm.sh/hook-delete-policy": before-hook-creation
+spec:
+  # No Job-level retries: the script already waits/retries internally with a bounded deadline
+  # (waitTimeoutSeconds), and extra pods per attempt only extend teardown - `helm uninstall`
+  # waits for the hook Job to be gone, so a retrying Job hangs store deletion for as long as it
+  # keeps trying (observed in practice: 3 attempts x 10min of waiting).
+  backoffLimit: 0
+  activeDeadlineSeconds: {{ .Values.woocommerceInit.activeDeadlineSeconds }}
+  template:
+    metadata:
+      labels:
+        {{- include "urumi-store.labels" . | nindent 8 }}
+        app.kubernetes.io/component: woocommerce-init
+    spec:
+      restartPolicy: Never
+      securityContext:
+        runAsUser: {{ .Values.woocommerceInit.securityContext.runAsUser }}
+        runAsGroup: {{ .Values.woocommerceInit.securityContext.runAsGroup }}
+        fsGroup: {{ .Values.woocommerceInit.securityContext.fsGroup }}
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: woocommerce-init
+          image: "{{ .Values.woocommerceInit.image.repository }}:{{ .Values.woocommerceInit.image.tag }}"
+          imagePullPolicy: {{ .Values.woocommerceInit.image.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+          env:
+            # Used by the wait loop so a storage/DB problem reports a clear message instead of
+            # a bare "connection refused" from WP-CLI.
+            - name: WORDPRESS_DB_HOST
+              value: "{{ $mariadbFullname }}"
+            - name: WORDPRESS_DB_PORT_NUMBER
+              value: "3306"
+            - name: WORDPRESS_DB_NAME
+              value: {{ .Values.wordpress.mariadb.auth.database | quote }}
+            - name: WORDPRESS_DB_USER
+              value: {{ .Values.wordpress.mariadb.auth.username | quote }}
+            - name: WORDPRESS_DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  # Optional so the chart stays installable standalone (without the
+                  # platform-created secret). The script authenticates through the
+                  # wp-config.php on the PVC; this env var only improves error messages.
+                  name: {{ $secretName }}
+                  key: mariadb-password
+                  optional: true
+            - name: WOOCOMMERCE_PRODUCT_NAME
+              value: {{ .Values.woocommerceInit.product.name | quote }}
+            - name: WOOCOMMERCE_PRODUCT_SKU
+              value: {{ .Values.woocommerceInit.product.sku | quote }}
+            - name: WOOCOMMERCE_PRODUCT_PRICE
+              value: {{ .Values.woocommerceInit.product.price | quote }}
+            - name: WOOCOMMERCE_PRODUCT_VIRTUAL
+              value: {{ .Values.woocommerceInit.product.virtual | quote }}
+            - name: WOOCOMMERCE_SEED_SHIPPING
+              value: {{ .Values.woocommerceInit.seedFreeShipping | quote }}
+            - name: WOOCOMMERCE_SHIPPING_ZONE_NAME
+              value: {{ .Values.woocommerceInit.shippingZoneName | quote }}
+            - name: WOOCOMMERCE_SHIPPING_COUNTRY
+              value: {{ .Values.woocommerceInit.shippingCountry | quote }}
+            - name: WOOCOMMERCE_CURRENCY
+              value: {{ .Values.woocommerceInit.currency | quote }}
+            - name: WORDPRESS_PATH
+              value: {{ $wpPath | quote }}
+            # The public URL WordPress must consider canonical. Bitnami's installer derives the
+            # initial siteurl/home from the pod's own address, which is unreachable through the
+            # ingress (links and redirects would point at the pod IP).
+            - name: WORDPRESS_SITE_URL
+              value: {{ if .Values.wordpress.ingress.enabled }}{{ printf "%s://%s" .Values.wordpress.wordpressScheme .Values.wordpress.ingress.hostname | quote }}{{ else }}""{{ end }}
+            - name: WORDPRESS_DATA_DIR
+              value: "/bitnami/wordpress"
+            - name: INIT_TIMEOUT_SECONDS
+              value: {{ .Values.woocommerceInit.waitTimeoutSeconds | quote }}
+          command: ["/bin/bash", "-c"]
+          args:
+            - |
+              set -euo pipefail
+              log() { echo "[init] $*"; }
+
+              # --- 1. WP-CLI ---------------------------------------------------------------
+              if command -v wp >/dev/null 2>&1; then
+                WP=(wp)
+              elif [ -x /opt/bitnami/wp-cli/bin/wp ]; then
+                WP=(/opt/bitnami/wp-cli/bin/wp)
+              else
+                # Last resort: the Bitnami image normally ships WP-CLI, but if a custom image
+                # does not, fetch the phar (requires outbound HTTPS from the namespace).
+                log "wp-cli not found in image; falling back to the phar"
+                curl -fsSL -o /tmp/wp-cli.phar https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar
+                chmod +x /tmp/wp-cli.phar
+                WP=(php /tmp/wp-cli.phar)
+              fi
+              log "using wp-cli: ${WP[*]}"
+
+              deadline=$(( $(date +%s) + INIT_TIMEOUT_SECONDS ))
+
+              wait_for() {
+                local description="$1"; shift
+                while true; do
+                  if "$@" >/dev/null 2>&1; then
+                    log "$description: ready"
+                    return 0
+                  fi
+                  if [ "$(date +%s)" -ge "$deadline" ]; then
+                    log "timed out waiting for $description"
+                    return 1
+                  fi
+                  sleep 5
+                done
+              }
+
+              # --- 2. Wait for the WordPress installation on the shared PVC -----------------
+              wait_for "wp-config.php on the persisted volume" test -f "$WORDPRESS_DATA_DIR/wp-config.php"
+
+              # The image ships WordPress core under $WORDPRESS_PATH; the mutable parts
+              # (wp-config.php, wp-content) live on the PVC. The WordPress container gets them
+              # through the chart's mounts/symlinks, but this Job bypasses the image entrypoint,
+              # so it must see the same layout. It does that with MOUNTS (see volumeMounts below)
+              # rather than by writing symlinks into /opt/bitnami/wordpress: in a bare pod that
+              # directory is not writable by uid 1001, so symlinking fails - and writing into the
+              # image layer is the wrong place for store data anyway.
+              for item in wp-config.php wp-content; do
+                if [ ! -e "$WORDPRESS_PATH/$item" ]; then
+                  log "ERROR: $item is not mounted into $WORDPRESS_PATH (check the Job's volumeMounts)"
+                  exit 1
+                fi
+              done
+              log "WordPress data on the PVC is mounted at $WORDPRESS_PATH"
+
+              wait_for "WordPress core + database" "${WP[@]}" --path="$WORDPRESS_PATH" core is-installed
+
+              # --- 3. WooCommerce plugin --------------------------------------------------
+              if "${WP[@]}" --path="$WORDPRESS_PATH" plugin is-installed woocommerce; then
+                log "woocommerce plugin already installed"
+                "${WP[@]}" --path="$WORDPRESS_PATH" plugin activate woocommerce
+              else
+                log "installing woocommerce plugin"
+                "${WP[@]}" --path="$WORDPRESS_PATH" plugin install woocommerce --activate
+              fi
+
+              # --- 4. Store configuration -------------------------------------------------
+              # Creates the shop/cart/checkout pages and the WooCommerce tables/roles.
+              "${WP[@]}" --path="$WORDPRESS_PATH" wc tool run install_pages --user=1 || true
+
+              # Pretty permalinks: the default "plain" permalinks still work, but product URLs
+              # are far more usable this way and /wp-json stays clean.
+              "${WP[@]}" --path="$WORDPRESS_PATH" rewrite structure '/%postname%/' >/dev/null
+
+              # Pin siteurl/home at the address users actually visit. Idempotent, and it repairs
+              # stores provisioned by earlier revisions on the next helm upgrade.
+              if [ -n "${WORDPRESS_SITE_URL:-}" ]; then
+                "${WP[@]}" --path="$WORDPRESS_PATH" option update siteurl "$WORDPRESS_SITE_URL" >/dev/null
+                "${WP[@]}" --path="$WORDPRESS_PATH" option update home "$WORDPRESS_SITE_URL" >/dev/null
+                "${WP[@]}" --path="$WORDPRESS_PATH" rewrite flush >/dev/null 2>&1 || true
+                log "site URL pinned to $WORDPRESS_SITE_URL"
+              fi
+              "${WP[@]}" --path="$WORDPRESS_PATH" option update woocommerce_currency "$WOOCOMMERCE_CURRENCY" >/dev/null
+              "${WP[@]}" --path="$WORDPRESS_PATH" option update woocommerce_default_country "US:CA" >/dev/null
+
+              # WooCommerce 9.1+ hides the storefront from visitors behind a "coming soon"
+              # mode on fresh installs. Without this the shop is not browsable.
+              "${WP[@]}" --path="$WORDPRESS_PATH" option update woocommerce_coming_soon no >/dev/null
+              "${WP[@]}" --path="$WORDPRESS_PATH" option update woocommerce_store_pages_only no >/dev/null || true
+
+              # A fresh WordPress serves the default blog, so the store URL would not list a
+              # single product. Fronting the store with the WooCommerce shop page is what makes
+              # "open the store URL -> see the product" true.
+              #
+              # This is fatal on failure, deliberately: a blog homepage still answers HTTP 200, so
+              # a warning here would let the readiness probe pass and mark a store Ready with no
+              # product on it - the exact false-readiness this platform is supposed to prevent.
+              shop_page_id="$("${WP[@]}" --path="$WORDPRESS_PATH" option get woocommerce_shop_page_id 2>/dev/null || true)"
+              if [ -z "$shop_page_id" ]; then
+                "${WP[@]}" --path="$WORDPRESS_PATH" wc tool run install_pages --user=1 >/dev/null 2>&1 || true
+                shop_page_id="$("${WP[@]}" --path="$WORDPRESS_PATH" option get woocommerce_shop_page_id 2>/dev/null || true)"
+              fi
+              if [ -z "$shop_page_id" ]; then
+                log "ERROR: WooCommerce has no shop page, so the storefront cannot list products"
+                exit 1
+              fi
+              shop_status="$("${WP[@]}" --path="$WORDPRESS_PATH" post get "$shop_page_id" --field=post_status 2>/dev/null || true)"
+              if [ "$shop_status" != "publish" ]; then
+                log "publishing shop page $shop_page_id (was: ${shop_status:-missing})"
+                "${WP[@]}" --path="$WORDPRESS_PATH" post update "$shop_page_id" --post_status=publish >/dev/null
+              fi
+              "${WP[@]}" --path="$WORDPRESS_PATH" option update show_on_front page >/dev/null
+              "${WP[@]}" --path="$WORDPRESS_PATH" option update page_on_front "$shop_page_id" >/dev/null
+              log "front page set to the shop page (id $shop_page_id)"
+
+              # Cash on Delivery: the checkout method that works without a payment provider.
+              "${WP[@]}" --path="$WORDPRESS_PATH" wc payment_gateway update cod --enabled=true --user=1 >/dev/null
+              # COD also has to accept carts without any shipping, otherwise a virtual-only cart
+              # reaches checkout with no payment method offered at all.
+              "${WP[@]}" --path="$WORDPRESS_PATH" option patch update woocommerce_cod_settings enable_for_virtual yes >/dev/null 2>&1 || true
+
+              # Checkout is the acceptance criterion, so the payment path is verified rather than
+              # assumed: a store that cannot take an order is not a provisioned store.
+              cod_settings="$("${WP[@]}" --path="$WORDPRESS_PATH" option get woocommerce_cod_settings --format=json 2>/dev/null || true)"
+              if ! printf '%s' "$cod_settings" | grep -Eq '"enabled":("yes"|true)'; then
+                log "ERROR: Cash on Delivery is not enabled: $cod_settings"
+                exit 1
+              fi
+              if [ "$WOOCOMMERCE_PRODUCT_VIRTUAL" = "true" ] \
+                && ! printf '%s' "$cod_settings" | grep -Eq '"enable_for_virtual":("yes"|true)'; then
+                log "ERROR: Cash on Delivery rejects virtual orders, so a virtual cart would offer no payment method: $cod_settings"
+                exit 1
+              fi
+              log "Cash on Delivery enabled and accepts virtual orders"
+
+              # Best effort: a free-shipping zone, so a *physical* product added later can also be
+              # checked out (a fresh WooCommerce store has no shipping method, and checkout then
+              # stops at "There are no shipping options available"). Failure here is logged, not
+              # fatal, because the seeded product itself does not need shipping.
+              if [ "$WOOCOMMERCE_SEED_SHIPPING" = "true" ]; then
+                zone_names="$("${WP[@]}" --path="$WORDPRESS_PATH" wc shipping_zone list --user=1 --field=name 2>/dev/null || true)"
+                if printf '%s' "$zone_names" | grep -qx "$WOOCOMMERCE_SHIPPING_ZONE_NAME"; then
+                  log "shipping zone '$WOOCOMMERCE_SHIPPING_ZONE_NAME' already present"
+                else
+                  zone_id="$("${WP[@]}" --path="$WORDPRESS_PATH" wc shipping_zone create --name="$WOOCOMMERCE_SHIPPING_ZONE_NAME" --user=1 --porcelain 2>/dev/null || true)"
+                  if [ -n "$zone_id" ]; then
+                    "${WP[@]}" --path="$WORDPRESS_PATH" wc shipping_zone_location update "$zone_id" --code="$WOOCOMMERCE_SHIPPING_COUNTRY" --user=1 >/dev/null 2>&1 || true
+                    "${WP[@]}" --path="$WORDPRESS_PATH" wc shipping_zone_method create "$zone_id" --method_id=free_shipping --enabled=true --user=1 >/dev/null 2>&1 || true
+                    log "seeded free shipping zone '$WOOCOMMERCE_SHIPPING_ZONE_NAME' for $WOOCOMMERCE_SHIPPING_COUNTRY"
+                  else
+                    log "WARNING: could not seed a shipping zone; physical products would need one configured in wp-admin"
+                  fi
+                fi
+              fi
+
+              # --- 5. Seeded demo product (idempotent: looked up by SKU first) -------------
+              existing_id="$("${WP[@]}" --path="$WORDPRESS_PATH" wc product list --sku="$WOOCOMMERCE_PRODUCT_SKU" --user=1 --field=id || true)"
+              if [ -z "$existing_id" ]; then
+                log "creating demo product $WOOCOMMERCE_PRODUCT_SKU"
+                "${WP[@]}" --path="$WORDPRESS_PATH" wc product create \
+                  --name="$WOOCOMMERCE_PRODUCT_NAME" \
+                  --sku="$WOOCOMMERCE_PRODUCT_SKU" \
+                  --type=simple \
+                  --virtual="$WOOCOMMERCE_PRODUCT_VIRTUAL" \
+                  --regular_price="$WOOCOMMERCE_PRODUCT_PRICE" \
+                  --status=publish \
+                  --manage_stock=true \
+                  --stock_quantity=100 \
+                  --user=1 >/dev/null
+              else
+                # Converge instead of skipping. A store seeded by an earlier revision may still
+                # hold a *physical* product, and a physical product cannot be checked out until a
+                # shipping method exists - leaving it untouched would keep such a store broken
+                # while re-running this Job looked successful.
+                log "updating demo product $WOOCOMMERCE_PRODUCT_SKU (id $existing_id)"
+                "${WP[@]}" --path="$WORDPRESS_PATH" wc product update "$existing_id" \
+                  --name="$WOOCOMMERCE_PRODUCT_NAME" \
+                  --virtual="$WOOCOMMERCE_PRODUCT_VIRTUAL" \
+                  --regular_price="$WOOCOMMERCE_PRODUCT_PRICE" \
+                  --status=publish \
+                  --manage_stock=true \
+                  --stock_quantity=100 \
+                  --user=1 >/dev/null
+              fi
+
+              # An out-of-stock product silently blocks checkout, so verify rather than assume.
+              #
+              # NOTE: every probe below is `|| true`-guarded on purpose. With `set -e` +
+              # `pipefail`, an unguarded command substitution that fails (an unknown --field, a
+              # missing product) terminates the script with *no output at all* once its stderr is
+              # redirected - a silent failure that looks like a crash and is painful to diagnose.
+              product_id="$("${WP[@]}" --path="$WORDPRESS_PATH" wc product list --sku="$WOOCOMMERCE_PRODUCT_SKU" --user=1 --field=id 2>/dev/null | head -1 || true)"
+              stock=""
+              if [ -n "$product_id" ]; then
+                # The REST/CLI column is `in_stock`; the canonical value lives in post meta.
+                stock="$("${WP[@]}" --path="$WORDPRESS_PATH" post meta get "$product_id" _stock_status 2>/dev/null || true)"
+              fi
+              if [ -n "$product_id" ] && [ "$stock" != "instock" ]; then
+                log "stock_status is '${stock:-unknown}' - forcing instock for product $product_id"
+                "${WP[@]}" --path="$WORDPRESS_PATH" wc product update "$product_id" --manage_stock=true --stock_quantity=100 --user=1 >/dev/null 2>&1 || true
+                "${WP[@]}" --path="$WORDPRESS_PATH" post meta update "$product_id" _stock_status instock >/dev/null 2>&1 || true
+                stock="$("${WP[@]}" --path="$WORDPRESS_PATH" post meta get "$product_id" _stock_status 2>/dev/null || true)"
+              fi
+              if [ "$stock" != "instock" ]; then
+                log "ERROR: demo product is not in stock ('${stock:-missing}'); checkout would be blocked"
+                exit 1
+              fi
+              log "demo product published and in stock (id $product_id)"
+
+              log "WooCommerce initialization complete"
+          volumeMounts:
+            # MUST match the WordPress container's mounts (the chart uses `subPath: wordpress`
+            # for the data dir). Without the subPath this pod sees the *volume root*, i.e.
+            # /bitnami/wordpress/wordpress/wp-config.php, and every path below misses.
+            - name: wordpress-data
+              mountPath: /bitnami/wordpress
+              subPath: wordpress
+            # WP-CLI operates on /opt/bitnami/wordpress (where the core files are), so the
+            # PVC-backed config and content have to appear there too - these two mounts are what
+            # the WordPress container's entrypoint would otherwise arrange with symlinks.
+            - name: wordpress-data
+              mountPath: /opt/bitnami/wordpress/wp-config.php
+              subPath: wordpress/wp-config.php
+            - name: wordpress-data
+              mountPath: /opt/bitnami/wordpress/wp-content
+              subPath: wordpress/wp-content
+          resources:
+            {{- toYaml .Values.woocommerceInit.resources | nindent 12 }}
+      volumes:
+        - name: wordpress-data
+          persistentVolumeClaim:
+            claimName: {{ $wpFullname }}
+{{- end }}

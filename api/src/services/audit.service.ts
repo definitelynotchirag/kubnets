@@ -4,9 +4,16 @@ import { logger } from "../lib/logger.js";
 export type AuditAction =
   | "store.created"
   | "store.provisioning"
+  | "store.namespace_ready"
+  | "store.credentials_ready"
+  | "store.helm_started"
+  | "store.helm_ready"
+  | "store.verifying"
   | "store.ready"
   | "store.failed"
   | "store.delete_requested"
+  | "store.helm_uninstalled"
+  | "store.namespace_deleted"
   | "store.deleted";
 
 export async function logAudit(

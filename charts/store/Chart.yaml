@@ -2,7 +2,7 @@ apiVersion: v2
 name: urumi-store
 description: A Helm chart for provisioning isolated WooCommerce stores
 type: application
-version: 0.1.0
+version: 0.2.0
 appVersion: "6.9.1"
 
 dependencies:

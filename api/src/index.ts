@@ -10,9 +10,9 @@ import { logger } from "./lib/logger.js";
 import { prisma } from "./lib/prisma.js";
 import { storesRouter } from "./routes/stores.js";
 import { errorHandler } from "./middleware/error-handler.js";
-import { enqueueProvision, enqueueDeletion } from "./workers/provisioner.worker.js";
 import { getAuditLogs } from "./services/audit.service.js";
 import { getMetrics } from "./services/metrics.service.js";
+import { reconcileStaleStores } from "./services/reconciliation.service.js";
 import { generalLimiter } from "./middleware/rate-limit.js";
 
 const app = express();
@@ -21,7 +21,14 @@ app.set("trust proxy", 1);
 app.use(cors());
 app.use(helmet());
 app.use(express.json());
-app.use(pinoHttp({ logger }));
+app.use(
+  pinoHttp({
+    logger,
+    // Readiness/liveness probes hit /api/health every few seconds; logging them buries the
+    // lifecycle events that actually matter (provisioning, reconciliation, failures).
+    autoLogging: { ignore: (req: { url?: string }) => req.url === "/api/health" },
+  })
+);
 app.use("/api", generalLimiter);
 
 // Routes
@@ -67,25 +74,6 @@ if (existsSync(dashboardPath)) {
 // Error handler
 app.use(errorHandler);
 
-// Startup reconciliation: re-enqueue stale stores
-async function reconcileStaleStores(): Promise<void> {
-  const provisioning = await prisma.store.findMany({
-    where: { status: "Provisioning" },
-  });
-  for (const store of provisioning) {
-    logger.info({ storeId: store.id }, "Re-enqueuing stale provisioning store");
-    enqueueProvision(store.id);
-  }
-
-  const deleting = await prisma.store.findMany({
-    where: { status: "Deleting" },
-  });
-  for (const store of deleting) {
-    logger.info({ storeId: store.id }, "Re-enqueuing stale deleting store");
-    enqueueDeletion(store.id);
-  }
-}
-
 // Graceful shutdown
 function shutdown(signal: string): void {
   logger.info({ signal }, "Shutting down...");
@@ -98,5 +86,9 @@ process.on("SIGINT", () => shutdown("SIGINT"));
 // Start server
 app.listen(config.PORT, async () => {
   logger.info({ port: config.PORT }, "API server started");
-  await reconcileStaleStores();
+  try {
+    await reconcileStaleStores();
+  } catch (err) {
+    logger.error({ err }, "reconciliation_failed");
+  }
 });

@@ -5,6 +5,10 @@ import { logger } from "../lib/logger.js";
 import type { Store, StoreEngine } from "@urumi/shared";
 import { enqueueProvision, enqueueDeletion } from "../workers/provisioner.worker.js";
 import { logAudit } from "./audit.service.js";
+import { StoreLimitReachedError, UnsupportedEngineError } from "../lib/errors.js";
+
+/** Only WooCommerce is implemented in Round 1; Medusa exists to show the engine seam. */
+const PROVISIONABLE_ENGINES: StoreEngine[] = ["woocommerce"];
 
 function generateShortId(): string {
   return crypto.randomBytes(4).toString("hex");
@@ -33,12 +37,16 @@ function toStoreResponse(record: {
 }
 
 export async function createStore(engine: StoreEngine, ipAddress?: string): Promise<Store> {
+  if (!PROVISIONABLE_ENGINES.includes(engine)) {
+    throw new UnsupportedEngineError(engine);
+  }
+
   const count = await prisma.store.count({
     where: { status: { notIn: ["Deleting"] } },
   });
 
   if (count >= config.MAX_STORES) {
-    throw new Error(`Maximum number of stores (${config.MAX_STORES}) reached`);
+    throw new StoreLimitReachedError(config.MAX_STORES);
   }
 
   const shortId = generateShortId();
@@ -75,7 +83,12 @@ export async function deleteStore(id: string, ipAddress?: string): Promise<Store
   const record = await prisma.store.findUnique({ where: { id } });
   if (!record) return null;
 
+  // Already deleting: this is a retry request (typically after a failed or interrupted
+  // cleanup), so push it back into the worker instead of ignoring it.
   if (record.status === "Deleting") {
+    logger.info({ storeId: id, namespace: record.namespace }, "deletion_retry_requested");
+    await logAudit("store.delete_requested", id, `Retry, namespace: ${record.namespace}`, ipAddress);
+    enqueueDeletion(id);
     return toStoreResponse(record);
   }
 

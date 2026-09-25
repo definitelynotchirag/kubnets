@@ -5,6 +5,8 @@ wordpress:
   wordpressLastName: Admin
   wordpressBlogName: "My Store"
 
+  # Installed and activated by the WordPress container at startup; the init Job below
+  # additionally configures the plugin (pages, COD, demo product) idempotently.
   wordpressPlugins: woocommerce
 
   service:
@@ -29,10 +31,20 @@ wordpress:
       cpu: 500m
       memory: 512Mi
 
+  # The subchart ships its own NetworkPolicy. Its default (`allowExternal: true`) accepts
+  # ingress to the WordPress pods from ANY namespace, which would silently defeat the
+  # per-store isolation the platform sets up (default-deny + explicit allow list).
+  # Egress stays open: WordPress needs wordpress.org to install plugins/updates.
+  networkPolicy:
+    allowExternal: false
+    allowExternalEgress: true
+
   mariadb:
     enabled: true
     auth:
       database: wordpress
+      # Must stay in sync with the subchart default; the init Job reports it in its logs.
+      username: bn_wordpress
     primary:
       persistence:
         enabled: true
@@ -44,3 +56,48 @@ wordpress:
         limits:
           cpu: 250m
           memory: 256Mi
+
+# Post-install/post-upgrade initialization: makes a fresh store actually usable
+# (WooCommerce activated, storefront visible, Cash on Delivery enabled, demo product seeded).
+# See templates/woocommerce-init-job.yaml.
+woocommerceInit:
+  enabled: true
+  # Must match the WordPress subchart image: the Job operates on the WordPress files on the
+  # shared PVC and must run with the same UID that owns them.
+  image:
+    repository: registry-1.docker.io/bitnami/wordpress
+    tag: latest
+    pullPolicy: IfNotPresent
+  # Secret created by the platform API (keys: mariadb-root-password, mariadb-password,
+  # mariadb-replication-password, wordpress-password).
+  existingSecret: store-credentials
+  wordpressPath: /opt/bitnami/wordpress
+  waitTimeoutSeconds: 600
+  activeDeadlineSeconds: 900
+  currency: USD
+  product:
+    name: Demo Product
+    sku: demo-product
+    price: "10"
+    # Virtual by default. A *physical* product cannot be checked out until a shipping method
+    # exists, and a fresh WooCommerce install has none - checkout stops at "There are no shipping
+    # options available". Seeding a virtual product removes that dependency entirely; set this to
+    # `false` only together with the free-shipping zone below (or your own shipping setup).
+    virtual: true
+  # Best-effort free-shipping zone so physical products added later are checkoutable too.
+  # Failures are logged, never fatal: the seeded product does not need shipping.
+  seedFreeShipping: true
+  shippingZoneName: Store shipping
+  shippingCountry: US
+  # 1001 is the Bitnami WordPress UID/fsGroup; a custom WordPress image may need different values.
+  securityContext:
+    runAsUser: 1001
+    runAsGroup: 1001
+    fsGroup: 1001
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi

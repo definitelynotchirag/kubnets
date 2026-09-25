@@ -20,8 +20,17 @@ docker-compose.override.yaml
 # Helm
 charts/*/charts/
 charts/*/*.tgz
+helm/*/charts/
+helm/*/*.tgz
 
 # k3d
 kubeconfig.yaml
 
 .claude
+
+# Local-only working files: kept on disk for reference but not published in the repo.
+# NOTE: files must also be untracked (git rm --cached) - .gitignore alone does not affect
+# files Git already tracks.
+ASSIGNMENT.md
+REPORT.md
+

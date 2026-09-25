@@ -1,9 +1,17 @@
-# Local k3d overrides
+# Local k3d / k3s overrides.
+#
+# Images are built locally and imported into the cluster (see README), so never pull them
+# from a registry here.
 api:
   image:
     pullPolicy: Never
   env:
     NODE_ENV: development
+    # The API runs inside the cluster in this profile, so it can reach a store's Service
+    # directly through the cluster network.
+    STORE_PROBE_MODE: service
+    HELM_VALUES_PROFILE: local
+    STORE_URL_SCHEME: http
 
 dashboard:
   image:

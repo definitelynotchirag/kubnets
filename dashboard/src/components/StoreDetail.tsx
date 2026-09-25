@@ -1,8 +1,9 @@
 import { useParams, Link } from "react-router-dom";
-import { ArrowLeft, ArrowUpRight, Clock, AlertCircle } from "lucide-react";
+import { ArrowLeft, ArrowUpRight, AlertCircle } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { useStore } from "../hooks/useStores";
 import { StatusBadge } from "./StatusBadge";
+import { StoreActivity } from "./StoreActivity";
 import { api } from "../api/client";
 import type { StoreStatus } from "@urumi/shared";
 
@@ -140,58 +141,7 @@ export function StoreDetail() {
         </DetailRow>
       </div>
 
-      {/* Activity Log */}
-      <div className="animate-fade-in-up stagger-3 mt-8">
-        <h2 className="text-sm font-semibold text-[var(--color-text-primary)] mb-4 tracking-tight">
-          Activity
-        </h2>
-
-        {logs.length === 0 ? (
-          <p className="text-xs text-[var(--color-text-muted)] py-8 text-center">
-            No activity recorded yet.
-          </p>
-        ) : (
-          <div className="relative">
-            {/* Timeline line */}
-            <div className="absolute left-[7px] top-2 bottom-2 w-px bg-[var(--color-border)]" />
-
-            <div className="space-y-0">
-              {logs.map((log, i) => (
-                <div
-                  key={log.id}
-                  className={`animate-fade-in stagger-${Math.min(i + 1, 8)} relative flex items-start gap-4 py-3`}
-                >
-                  {/* Dot */}
-                  <div className="relative z-10 mt-1">
-                    <div className="w-[15px] h-[15px] rounded-full border-2 border-[var(--color-border)] bg-[var(--color-surface-raised)]" />
-                  </div>
-
-                  {/* Content */}
-                  <div className="flex-1 flex items-baseline justify-between min-w-0">
-                    <div className="min-w-0">
-                      <span className="text-sm font-medium text-[var(--color-text-primary)]">
-                        {log.action.replace("store.", "")}
-                      </span>
-                      {log.details && (
-                        <p className="text-xs text-[var(--color-text-muted)] mt-0.5 truncate">
-                          {log.details}
-                        </p>
-                      )}
-                    </div>
-                    <div className="flex items-center gap-1.5 text-[11px] text-[var(--color-text-muted)] whitespace-nowrap ml-4 shrink-0">
-                      <Clock className="h-3 w-3" />
-                      {new Date(log.createdAt).toLocaleTimeString("en-US", {
-                        hour: "2-digit",
-                        minute: "2-digit",
-                      })}
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-      </div>
+      <StoreActivity store={store} logs={logs} />
     </div>
   );
 }

@@ -84,3 +84,32 @@ body {
 .stagger-6 { animation-delay: 0.3s; }
 .stagger-7 { animation-delay: 0.35s; }
 .stagger-8 { animation-delay: 0.4s; }
+
+/* Live-activity animations: new audit events slide in, completed steps pop, the running step
+   pulses, and the indeterminate progress bar keeps the page visibly moving during a long Helm
+   install (the API reports steps, not percentages, so the bar shows motion, not false precision). */
+@keyframes slide-in-left {
+  from { opacity: 0; transform: translateX(-10px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes pop-in {
+  0% { opacity: 0; transform: scale(0.5); }
+  60% { transform: scale(1.15); }
+  100% { opacity: 1; transform: scale(1); }
+}
+
+@keyframes progress-sweep {
+  from { transform: translateX(-110%); }
+  to { transform: translateX(310%); }
+}
+
+@keyframes ping-slow {
+  0% { transform: scale(1); opacity: 0.6; }
+  75%, 100% { transform: scale(2.2); opacity: 0; }
+}
+
+.animate-slide-in-left { animation: slide-in-left 0.35s ease-out both; }
+.animate-pop-in { animation: pop-in 0.35s ease-out both; }
+.animate-progress { animation: progress-sweep 1.8s ease-in-out infinite; }
+.animate-ping-slow { animation: ping-slow 1.8s cubic-bezier(0, 0, 0.2, 1) infinite; }
