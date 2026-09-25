@@ -1,0 +1,24 @@
+# Production overrides
+medusa:
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+
+  ingress:
+    tls: true
+    annotations:
+      cert-manager.io/cluster-issuer: letsencrypt-prod
+
+postgresql:
+  primary:
+    persistence:
+      size: 10Gi
+
+redis:
+  master:
+    persistence:
+      size: 2Gi

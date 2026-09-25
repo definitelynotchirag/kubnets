@@ -1,0 +1,25 @@
+{{- if .Values.medusa.ingress.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ .Release.Name }}-medusa
+  labels:
+    {{- include "medusa-store.labels" . | nindent 4 }}
+  {{- with .Values.medusa.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  ingressClassName: {{ .Values.medusa.ingress.ingressClassName }}
+  rules:
+    - host: {{ .Values.medusa.ingress.hostname }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ .Release.Name }}-medusa
+                port:
+                  name: http
+{{- end }}

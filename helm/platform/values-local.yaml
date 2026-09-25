@@ -1,0 +1,16 @@
+# Local k3d overrides
+api:
+  image:
+    pullPolicy: Never
+  env:
+    NODE_ENV: development
+
+dashboard:
+  image:
+    pullPolicy: Never
+
+postgresql:
+  primary:
+    persistence:
+      storageClass: local-path
+      size: 512Mi

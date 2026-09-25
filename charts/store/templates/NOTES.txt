@@ -1,0 +1,14 @@
+Urumi Store "{{ .Release.Name }}" has been deployed!
+
+{{- if .Values.wordpress.ingress.enabled }}
+
+Access your store at:
+  http{{ if .Values.wordpress.ingress.tls }}s{{ end }}://{{ .Values.wordpress.ingress.hostname }}
+
+{{- end }}
+
+WordPress admin:
+  Username: {{ .Values.wordpress.wordpressUsername }}
+  Password: kubectl get secret --namespace {{ .Release.Namespace }} {{ .Release.Name }}-wordpress -o jsonpath="{.data.wordpress-password}" | base64 -d
+
+WooCommerce is pre-installed and ready for configuration.

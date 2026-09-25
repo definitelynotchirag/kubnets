@@ -1,0 +1,14 @@
+# Production overrides
+api:
+  env:
+    NODE_ENV: production
+
+ingress:
+  tls: true
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+
+postgresql:
+  primary:
+    persistence:
+      size: 10Gi

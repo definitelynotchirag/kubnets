@@ -1,0 +1,30 @@
+# Local development overrides
+medusa:
+  resources:
+    requests:
+      cpu: 50m
+      memory: 256Mi
+    limits:
+      cpu: 250m
+      memory: 512Mi
+
+storefront:
+  resources:
+    requests:
+      cpu: 25m
+      memory: 128Mi
+    limits:
+      cpu: 125m
+      memory: 256Mi
+
+postgresql:
+  primary:
+    persistence:
+      storageClass: local-path
+      size: 1Gi
+
+redis:
+  master:
+    persistence:
+      storageClass: local-path
+      size: 512Mi

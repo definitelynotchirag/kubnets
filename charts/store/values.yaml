@@ -1,0 +1,46 @@
+wordpress:
+  wordpressUsername: admin
+  wordpressEmail: admin@example.com
+  wordpressFirstName: Store
+  wordpressLastName: Admin
+  wordpressBlogName: "My Store"
+
+  wordpressPlugins: woocommerce
+
+  service:
+    type: ClusterIP
+
+  ingress:
+    enabled: true
+    ingressClassName: nginx
+    hostname: store.localtest.me
+    annotations:
+      nginx.ingress.kubernetes.io/proxy-body-size: "50m"
+
+  persistence:
+    enabled: true
+    size: 2Gi
+
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+  mariadb:
+    enabled: true
+    auth:
+      database: wordpress
+    primary:
+      persistence:
+        enabled: true
+        size: 2Gi
+      resources:
+        requests:
+          cpu: 50m
+          memory: 128Mi
+        limits:
+          cpu: 250m
+          memory: 256Mi

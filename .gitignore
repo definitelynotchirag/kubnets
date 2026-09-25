@@ -1,0 +1,27 @@
+node_modules/
+dist/
+.env
+*.log
+.DS_Store
+
+# Prisma
+api/prisma/*.db
+
+# Build artifacts
+*.tsbuildinfo
+
+# IDE
+.vscode/
+.idea/
+
+# Docker
+docker-compose.override.yaml
+
+# Helm
+charts/*/charts/
+charts/*/*.tgz
+
+# k3d
+kubeconfig.yaml
+
+.claude

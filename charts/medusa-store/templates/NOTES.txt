@@ -1,0 +1,11 @@
+Urumi MedusaJS Store "{{ .Release.Name }}" has been deployed!
+
+{{- if .Values.medusa.ingress.enabled }}
+
+Access your store API at:
+  http{{ if .Values.medusa.ingress.tls }}s{{ end }}://{{ .Values.medusa.ingress.hostname }}
+
+Admin panel:
+  http{{ if .Values.medusa.ingress.tls }}s{{ end }}://{{ .Values.medusa.ingress.hostname }}/app
+
+{{- end }}

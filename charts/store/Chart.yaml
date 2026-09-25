@@ -1,0 +1,11 @@
+apiVersion: v2
+name: urumi-store
+description: A Helm chart for provisioning isolated WooCommerce stores
+type: application
+version: 0.1.0
+appVersion: "6.9.1"
+
+dependencies:
+  - name: wordpress
+    version: "28.x.x"
+    repository: oci://registry-1.docker.io/bitnamicharts

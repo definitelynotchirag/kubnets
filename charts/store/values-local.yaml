@@ -1,0 +1,26 @@
+# k3d / docker-compose local development overrides
+wordpress:
+  resources:
+    requests:
+      cpu: 50m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+  persistence:
+    storageClass: local-path
+    size: 1Gi
+
+  mariadb:
+    primary:
+      persistence:
+        storageClass: local-path
+        size: 1Gi
+      resources:
+        requests:
+          cpu: 50m
+          memory: 256Mi
+        limits:
+          cpu: 250m
+          memory: 512Mi

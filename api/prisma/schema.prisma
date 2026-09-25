@@ -1,0 +1,37 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Store {
+  id           String   @id @default(uuid()) @db.Uuid
+  namespace    String   @unique
+  engine       String   @default("woocommerce")
+  status       String   @default("Pending")
+  url          String?
+  errorMessage String?  @map("error_message")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  auditLogs AuditLog[]
+
+  @@map("stores")
+}
+
+model AuditLog {
+  id        String   @id @default(uuid()) @db.Uuid
+  storeId   String?  @map("store_id") @db.Uuid
+  store     Store?   @relation(fields: [storeId], references: [id], onDelete: SetNull)
+  action    String
+  details   String?
+  ipAddress String?  @map("ip_address")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([storeId])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
