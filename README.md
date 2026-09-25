@@ -7,6 +7,8 @@ credentials, and its own ingress — created, watched and torn down by the platf
 WooCommerce is fully implemented (including a seeded product and a working Cash-on-Delivery
 checkout). MedusaJS is an architectural stub — the engine seam exists, the engine does not.
 
+![Kubnets architecture: dashboard → API → Helm → per-store namespaces](docs/architecture.png)
+
 ---
 
 ## Verification status — read this before trusting anything below
